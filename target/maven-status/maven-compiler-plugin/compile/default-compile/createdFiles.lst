@@ -3,6 +3,9 @@ com\example\hhanalyzer\Main.class
 com\example\hhanalyzer\MiniServer.class
 com\example\hhanalyzer\model\Employer.class
 com\example\hhanalyzer\db\DbService.class
+com\example\hhanalyzer\api\ApiTest.class
+com\example\hhanalyzer\auth\AuthManager.class
 com\example\hhanalyzer\api\HhApiClient.class
 com\example\hhanalyzer\model\Vacancy.class
+com\example\hhanalyzer\CharsetTest.class
 com\example\hhanalyzer\service\VacancyService.class

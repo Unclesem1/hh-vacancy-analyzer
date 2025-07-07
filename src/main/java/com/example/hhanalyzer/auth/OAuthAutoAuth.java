@@ -14,23 +14,84 @@ import com.sun.net.httpserver.HttpServer;
 
 public class OAuthAutoAuth {
 
-    // CLIENT_ID, CLIENT_SECRET и REDIRECT_URI свои
-    private static final String CLIENT_ID = "KA2013FOJ7UU70FP53UQGLSCFU2O1367EHU6R5NU7LIEDM3JRH04UBNAFGQTJVU1";
-    private static final String CLIENT_SECRET = "U7FK881IHG474ABK882QD8GK2CHA47TEO07P3RAMBUR74CCPFO3F2GDO7IH9J3RD";
-    private static final String REDIRECT_URI = "http://localhost:8080/callback";
     private static final int PORT = 8080;
 
-    private static String accessToken;
-    private static String refreshToken;
-
     public static void main(String[] args) throws Exception {
+        AuthManager manager = new AuthManager();
+        try {
+            String token = manager.getAccessToken();
+            System.out.println("Токен актуален: " + token);
+            return;
+        } catch (Exception e) {
+            System.out.println("Нужна авторизация через браузер...");
+        }
+
+        // Запускаем mini-HTTP сервер для получения кода
         CountDownLatch waitForCode = new CountDownLatch(1);
-        Thread serverThread = new Thread(() -> runCallbackServer(waitForCode));
+        final String[] codeHolder = new String[1];
+        final int[] expiresInHolder = new int[1];
+        final String[] accessTokenHolder = new String[1];
+        final String[] refreshTokenHolder = new String[1];
+
+        Thread serverThread = new Thread(() -> {
+            try {
+                HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
+                server.createContext("/callback", exchange -> {
+                    String query = exchange.getRequestURI().getQuery();
+                    String code = null;
+                    if (query != null) {
+                        for (String param : query.split("&")) {
+                            if (param.startsWith("code=")) {
+                                code = param.substring("code=".length());
+                                break;
+                            }
+                        }
+                    }
+                    String responseText;
+                    if (code != null) {
+                        responseText = "<html><body>Авторизация прошла успешно! Можешь закрыть это окно.</body></html>";
+                        byte[] responseBytes = responseText.getBytes(StandardCharsets.UTF_8);
+                        exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
+                        exchange.sendResponseHeaders(200, responseBytes.length);
+                        try (OutputStream os = exchange.getResponseBody()) {
+                            os.write(responseBytes);
+                        }
+                        try {
+                            var result = exchangeCodeForToken(code);
+                            accessTokenHolder[0] = result[0];
+                            refreshTokenHolder[0] = result[1];
+                            expiresInHolder[0] = Integer.parseInt(result[2]);
+                            codeHolder[0] = code;
+                        } catch (Exception ex) {
+                            ex.printStackTrace();
+                        }
+                        waitForCode.countDown();
+                    } else {
+                        responseText = "Нет code!";
+                        byte[] responseBytes = responseText.getBytes(StandardCharsets.UTF_8);
+                        exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=UTF-8");
+                        exchange.sendResponseHeaders(400, responseBytes.length);
+                        try (OutputStream os = exchange.getResponseBody()) {
+                            os.write(responseBytes);
+                        }
+                    }
+                });
+                server.start();
+                System.out.println("Ожидание авторизации на http://localhost:" + PORT + "/callback ...");
+                while (waitForCode.getCount() > 0) {
+                    Thread.sleep(100);
+                }
+                server.stop(1);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        });
         serverThread.start();
 
+        // Открываем браузер для авторизации
         String authUrl = String.format(
-            "https://hh.ru/oauth/authorize?response_type=code&client_id=%s&redirect_uri=%s&state=xyz",
-            CLIENT_ID, URLEncoder.encode(REDIRECT_URI, StandardCharsets.UTF_8));
+                "https://hh.ru/oauth/authorize?response_type=code&client_id=%s&redirect_uri=%s&state=xyz",
+                AuthManager.CLIENT_ID, URLEncoder.encode(AuthManager.REDIRECT_URI, StandardCharsets.UTF_8));
         System.out.println("Открой ссылку (или она откроется сама):\n" + authUrl);
 
         if (Desktop.isDesktopSupported()) {
@@ -39,62 +100,19 @@ public class OAuthAutoAuth {
 
         waitForCode.await();
 
-        System.out.println("access_token: " + accessToken);
-        System.out.println("refresh_token: " + refreshToken);
-
-        System.exit(0);
+        // Сохраняем токены
+        manager.setTokensFromOAuth(accessTokenHolder[0], refreshTokenHolder[0], expiresInHolder[0]);
+        System.out.println("Токены получены и сохранены.");
     }
 
-    private static void runCallbackServer(CountDownLatch waitForCode) {
-        try {
-            HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
-            server.createContext("/callback", exchange -> {
-                String query = exchange.getRequestURI().getQuery();
-                String code = null;
-                if (query != null) {
-                    for (String param : query.split("&")) {
-                        if (param.startsWith("code=")) {
-                            code = param.substring("code=".length());
-                            break;
-                        }
-                    }
-                }
-                String response;
-                if (code != null) {
-                    response = "<html><body>Авторизация прошла успешно! Можешь закрыть это окно.</body></html>";
-                    exchange.sendResponseHeaders(200, response.length());
-                    try {
-                        exchangeCodeForToken(code); // <- теперь обработка ошибок
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                    waitForCode.countDown();
-                } else {
-                    response = "Нет code!";
-                    exchange.sendResponseHeaders(400, response.length());
-                }
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(response.getBytes());
-                }
-            });
-            server.start();
-            System.out.println("Ожидание авторизации на http://localhost:" + PORT + "/callback ...");
-            while (waitForCode.getCount() > 0) {
-                Thread.sleep(100);
-            }
-            server.stop(1);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private static void exchangeCodeForToken(String code) throws IOException, InterruptedException {
+    // Обменять code на access_token, refresh_token, expires_in
+    private static String[] exchangeCodeForToken(String code) throws IOException, InterruptedException {
         String url = "https://hh.ru/oauth/token";
         String body = "grant_type=authorization_code"
-                + "&client_id=" + CLIENT_ID
-                + "&client_secret=" + CLIENT_SECRET
+                + "&client_id=" + AuthManager.CLIENT_ID
+                + "&client_secret=" + AuthManager.CLIENT_SECRET
                 + "&code=" + code
-                + "&redirect_uri=" + URLEncoder.encode(REDIRECT_URI, StandardCharsets.UTF_8);
+                + "&redirect_uri=" + URLEncoder.encode(AuthManager.REDIRECT_URI, StandardCharsets.UTF_8);
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -108,8 +126,10 @@ public class OAuthAutoAuth {
         if (response.statusCode() == 200) {
             ObjectMapper om = new ObjectMapper();
             JsonNode tree = om.readTree(response.body());
-            accessToken = tree.get("access_token").asText();
-            refreshToken = tree.has("refresh_token") ? tree.get("refresh_token").asText() : null;
+            String accessToken = tree.get("access_token").asText();
+            String refreshToken = tree.has("refresh_token") ? tree.get("refresh_token").asText() : null;
+            int expiresIn = tree.has("expires_in") ? tree.get("expires_in").asInt() : 3600;
+            return new String[]{accessToken, refreshToken, String.valueOf(expiresIn)};
         } else {
             throw new RuntimeException("Ошибка авторизации: " + response.body());
         }
