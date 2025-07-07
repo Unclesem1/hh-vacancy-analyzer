@@ -1,5 +1,6 @@
 com\example\hhanalyzer\Main.class
 com\example\hhanalyzer\MiniServer.class
+com\example\hhanalyzer\api\VacancyDetailLoader.class
 com\example\hhanalyzer\db\DbService.class
 com\example\hhanalyzer\api\ApiTest.class
 com\example\hhanalyzer\api\VacancyFetcher.class

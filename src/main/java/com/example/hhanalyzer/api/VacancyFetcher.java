@@ -16,17 +16,24 @@ import java.util.List;
 
 public class VacancyFetcher {
 
-    // Получить все вакансии по параметрам
-    public static List<JsonNode> fetchAllVacancies(String text, String area, boolean remote, boolean noAgency) throws Exception {
+    /**
+     * Получить все id вакансий по заданным параметрам поиска.
+     * @param text поисковый запрос (например, "системный аналитик")
+     * @param area регион (например, "1" — Москва)
+     * @param remote true — только удалёнка, false — любые
+     * @param noAgency true — без кадровых агентств
+     * @return список id вакансий (строки)
+     */
+    public static List<String> fetchVacancyIds(String text, String area, boolean remote, boolean noAgency) throws Exception {
         AuthManager auth = new AuthManager();
         String accessToken = auth.getAccessToken();
 
-        List<JsonNode> allVacancies = new ArrayList<>();
+        List<String> allIds = new ArrayList<>();
         ObjectMapper mapper = new ObjectMapper();
         HttpClient client = HttpClient.newHttpClient();
 
         int page = 0;
-        int perPage = 100; // максимум, что даёт hh.ru
+        int perPage = 100;
         int pages = 1;
 
         while (page < pages) {
@@ -41,8 +48,6 @@ public class VacancyFetcher {
             if (remote) url.append("&schedule=remote");
             if (noAgency) url.append("&no_agency=true");
 
-            // Можно добавить: url.append("&search_field=name"); // поиск только по названию
-
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url.toString()))
                     .header("Authorization", "Bearer " + accessToken)
@@ -50,7 +55,12 @@ public class VacancyFetcher {
                     .GET()
                     .build();
 
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                    HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+                   // System.out.println("URL запроса: " + url.toString());
+                  //  System.out.println("Код ответа: " + response.statusCode());
+                   // System.out.println("Ответ сервера: " + response.body());
+                    
 
             if (response.statusCode() != 200) {
                 throw new IOException("Ошибка при запросе вакансий: " + response.body());
@@ -59,38 +69,32 @@ public class VacancyFetcher {
             JsonNode root = mapper.readTree(response.body());
             if (root.has("items")) {
                 for (JsonNode vacancy : root.get("items")) {
-                    allVacancies.add(vacancy);
+                    allIds.add(vacancy.get("id").asText());
                 }
             }
 
-            // Узнаём количество страниц, чтобы пройти все (API возвращает поле 'pages')
+            // Узнаём количество страниц (API возвращает поле 'pages')
             if (page == 0 && root.has("pages")) {
                 pages = root.get("pages").asInt();
             }
-
-            // Ограничение HH — максимум 2000 вакансий на запрос (20 страниц по 100)
+            // Ограничение hh.ru: максимум 2000 вакансий на запрос (20 страниц по 100)
             if (page >= 19) break;
-
             page++;
         }
-
-        return allVacancies;
+        return allIds;
     }
 
-    // Пример main для теста
+    // Для теста: пример main
     public static void main(String[] args) throws Exception {
-        List<JsonNode> vacancies = fetchAllVacancies(
+        List<String> ids = fetchVacancyIds(
                 "системный аналитик", // текст поиска
                 "1",                  // регион "1" — Москва
                 true,                 // только удалёнка
                 true                  // без кадровых агентств
         );
-        System.out.println("Всего найдено: " + vacancies.size());
-        for (int i = 0; i < Math.min(vacancies.size(), 5); i++) {
-            JsonNode v = vacancies.get(i);
-            System.out.println((i+1) + ". " + v.get("name").asText() +
-                    " | " + v.get("employer").get("name").asText() +
-                    " | " + v.get("alternate_url").asText());
+        System.out.println("Найдено id вакансий: " + ids.size());
+        for (int i = 0; i <  ids.size(); i++) {
+        System.out.println((i + 1) + ": " + ids.get(i));
         }
     }
 }
